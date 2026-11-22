@@ -1,0 +1,62 @@
+{
+  "name": "homm-devkit",
+  "version": "2.0.0",
+  "description": "Language-agnostic starter for deterministic guardrails in Claude Code: a check engine that runs the commands you configure on every edit and blocks only regressions vs git HEAD, a final check before an agent may finish, secret/branch guards, a read-only reviewer agent, /add-check to grow new checks and /reflect.",
+  "author": {
+    "name": "HoMmz"
+  },
+  "homepage": "https://github.com/HoMmz/homm-devkit",
+  "repository": "https://github.com/HoMmz/homm-devkit",
+  "license": "MIT",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check.sh\"",
+            "timeout": 120,
+            "statusMessage": "devkit check"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stop-check.sh\"",
+            "timeout": 240,
+            "statusMessage": "devkit: final check"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stop-check.sh\"",
+            "timeout": 240,
+            "statusMessage": "devkit: final check"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "homm-devkit",
+  "description": "Language-agnostic starter for deterministic guardrails in Claude Code",
+  "owner": {
+    "name": "HoMmz"
+  },
+  "plugins": [
+    {
+      "name": "homm-devkit",
+      "description": "Configurable check engine (blocks only regressions), final check before finishing, secret/branch guards, read-only reviewer, /add-check, /reflect",
+      "source": "./",
+      "category": "development"
+    }
+  ]
+}
