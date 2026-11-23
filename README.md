@@ -82,9 +82,23 @@ When a tool's exit codes don't fit, write a small wrapper that prints findings a
 
 ### Guard
 
-- Denies `Read`/`Grep` on `.env` / `.env.*` and Bash commands that name one. `.env.example/.sample/.dist/.template` are allowed.
-- `guards.protectBranches`: no commit/merge/cherry-pick/rebase on those branches, and no push to them, unless the command is prefixed `DEVKIT_ALLOW_MASTER=1`. Use the prefix only when the user asked for that merge/push.
-- The repo is taken from `git -C <dir>`, else from the last `cd <dir>` before the git command, else from cwd. Use literal paths; the guard can't resolve `$VARS`.
+- Denies `Read` on `.env` / `.env.*` (any letter case), `Grep` with such a path or glob, and Bash commands that name one. `.env.example/.sample/.dist/.template` are allowed.
+- `guards.protectBranches`: every git commit/merge/cherry-pick/rebase/push in the command is judged on the branch it will run on. The guard follows `git checkout|switch` (including `-b`, `-`, `--track`) earlier in the same command, so no write lands on those branches and no push targets them (`branch`, `x:branch`, `refs/heads/branch`, `+branch`, `HEAD` while on it, `--all`, `--mirror`). To go through on purpose, prefix the git command with `DEVKIT_ALLOW_MASTER=1`. Use the prefix only when the user asked for that merge/push. A git worktree uses its main repo's entry.
+- The repo is taken from `git -C <dir>` / `--work-tree <dir>`, else from the last `cd|pushd <dir>` before the git command, else from cwd.
+
+**Limits: the guard is a speed bump, not a security boundary.** It catches an agent's ordinary mistakes: typing the file name, merging into `master` in one command. A shell can always get around it. It does not catch:
+- shell globs (`cat .en?`)
+- recursive search (`grep -r`, or `Grep` over a whole folder)
+- interpreters that build the name (`python -c …`)
+- other secret files (`*.pem`, `id_rsa`, `secrets.json`)
+- `$VAR` paths
+- git commands outside the list (`reset`, `revert`, `pull`, `am`)
+- git run indirectly (`bash -c '…'`, aliases)
+- several repos in one command (judged by the repo of the first git write)
+- option values containing spaces, line continuations, `push -o <value>`
+- a missing `jq` (the guard then lets everything through)
+
+These cases are pinned as "known limits" in `tests/run.sh`. For real protection, deny reads in Claude Code permissions (`"permissions": {"deny": ["Read(./.env)", "Read(./.env.*)"]}`) or enable the sandbox, keep secrets outside the working tree, and turn on branch protection on the git server.
 
 ## Extending
 

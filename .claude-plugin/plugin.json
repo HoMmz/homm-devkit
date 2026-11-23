@@ -1,7 +1,7 @@
 {
   "name": "homm-devkit",
-  "version": "2.0.0",
-  "description": "Language-agnostic starter for deterministic guardrails in Claude Code: a check engine that runs the commands you configure on every edit and blocks only regressions vs git HEAD, a final check before an agent may finish, secret/branch guards, a read-only reviewer agent, /add-check to grow new checks and /reflect.",
+  "version": "2.0.1",
+  "description": "Language-agnostic starter for deterministic guardrails in Claude Code: a check engine that runs the commands you configure on every edit and blocks only regressions vs git HEAD, a final check before an agent may finish, speed-bump guards against reading secret files and committing to protected branches, a read-only reviewer agent, /add-check to grow new checks and /reflect.",
   "author": {
     "name": "HoMmz"
   },

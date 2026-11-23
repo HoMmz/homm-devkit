@@ -244,38 +244,150 @@ GUARD="$DK/hooks/guard.sh"
 run_guard() {   # run_guard <tool> <json tool_input> [cwd]
   ERR=$(jq -n --arg t "$1" --argjson ti "$2" --arg c "${3:-$W}" '{tool_name:$t, tool_input:$ti, cwd:$c}' | env DEVKIT_CONFIG="$CFG" "$GUARD" 2>&1 >/dev/null); RC=$?
 }
+# a guard script error falls through to "allow", so allow cases also assert a clean stderr
+gexpect() {   # gexpect <name> <rc> [stderr-substring]
+  if [[ $RC == 0 && -n "$ERR" ]]; then bad "$1" "allowed, but the guard printed: $(head -c 200 <<<"$ERR")"; return; fi
+  expect "$@"
+}
 E=".env"   # built at runtime so this file itself never names a secret file literally in a command
-run_guard Read "{\"file_path\":\"/x/app$E\"}";              expect "Read app$E is not .env -> allow" 0
-run_guard Read "{\"file_path\":\"/x/$E\"}";                 expect "Read $E -> deny" 2 "not allowed"
-run_guard Read "{\"file_path\":\"/x/$E.production\"}";      expect "Read $E.production -> deny" 2 "not allowed"
-run_guard Read "{\"file_path\":\"/x/application/$E.example\"}"; expect "Read $E.example -> allow" 0
-run_guard Grep "{\"pattern\":\"DB_\",\"path\":\"/x/$E\"}";  expect "Grep inside $E -> deny" 2 "not allowed"
-run_guard Bash "{\"command\":\"cat $E | head\"}";           expect "Bash cat $E -> deny" 2 "references"
-run_guard Bash "{\"command\":\"cp $E.example $E.local.bak\"}"; expect "Bash naming $E.local -> deny" 2 "references"
-run_guard Bash "{\"command\":\"diff $E.example $E.dist\"}"; expect "Bash with only template names -> allow" 0
-run_guard Bash "{\"command\":\"grep -rn getenv app/\"}";     expect "Bash unrelated -> allow" 0
+run_guard Read "{\"file_path\":\"/x/app$E\"}"; gexpect "Read app$E is not .env -> allow" 0
+run_guard Read "{\"file_path\":\"/x/$E\"}"; gexpect "Read $E -> deny" 2 "not allowed"
+run_guard Read "{\"file_path\":\"/x/$E.production\"}"; gexpect "Read $E.production -> deny" 2 "not allowed"
+run_guard Read "{\"file_path\":\"/x/application/$E.example\"}"; gexpect "Read $E.example -> allow" 0
+run_guard Grep "{\"pattern\":\"DB_\",\"path\":\"/x/$E\"}"; gexpect "Grep inside $E -> deny" 2 "not allowed"
+run_guard Bash "{\"command\":\"cat $E | head\"}"; gexpect "Bash cat $E -> deny" 2 "references"
+run_guard Bash "{\"command\":\"cp $E.example $E.local.bak\"}"; gexpect "Bash naming $E.local -> deny" 2 "references"
+run_guard Bash "{\"command\":\"diff $E.example $E.dist\"}"; gexpect "Bash with only template names -> allow" 0
+run_guard Bash "{\"command\":\"grep -rn getenv app/\"}"; gexpect "Bash unrelated -> allow" 0
 
 RG=$(newrepo rg)
 printf '<?php\n' > "$RG/a.php"; commit "$RG"
 git -C "$RG" branch -M master
 mkcfg "{\"repos\":{\"$RG\":{\"guards\":{\"protectBranches\":[\"master\"]}}}}"
-run_guard Bash '{"command":"git commit -m x"}' "$RG";                       expect "commit on master -> deny" 2 "protected branch"
-run_guard Bash '{"command":"git switch -c fix/x && git commit -m x"}' "$RG"; expect "switch -c then commit -> allow" 0
-run_guard Bash '{"command":"git push origin master"}' "$RG";                expect "push origin master -> deny" 2 "push to protected"
-run_guard Bash '{"command":"DEVKIT_ALLOW_MASTER=1 git push origin master"}' "$RG"; expect "explicit DEVKIT_ALLOW_MASTER=1 -> allow" 0
-run_guard Bash "{\"command\":\"cd $RG && git merge --no-ff fix/x\"}" "$W";   expect "cd <repo> && merge on master -> deny" 2 "protected branch"
-run_guard Bash "{\"command\":\"git -C $RG commit -m x\"}" "$W";              expect "git -C <repo> commit on master -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git commit -m x"}' "$RG"; gexpect "commit on master -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git switch -c fix/x && git commit -m x"}' "$RG"; gexpect "switch -c then commit -> allow" 0
+run_guard Bash '{"command":"git push origin master"}' "$RG"; gexpect "push origin master -> deny" 2 "push to protected"
+run_guard Bash '{"command":"DEVKIT_ALLOW_MASTER=1 git push origin master"}' "$RG"; gexpect "explicit DEVKIT_ALLOW_MASTER=1 -> allow" 0
+run_guard Bash "{\"command\":\"cd $RG && git merge --no-ff fix/x\"}" "$W"; gexpect "cd <repo> && merge on master -> deny" 2 "protected branch"
+run_guard Bash "{\"command\":\"git -C $RG commit -m x\"}" "$W"; gexpect "git -C <repo> commit on master -> deny" 2 "protected branch"
 # cwd is the protected repo, but the command cd's into another (unprotected) repo first
 RO=$(newrepo ro); printf '<?php\n' > "$RO/b.php"; commit "$RO"; git -C "$RO" branch -M master
-run_guard Bash "{\"command\":\"set -o pipefail; cd $RO && git add -A && git commit -m x\"}" "$RG"; expect "set -o pipefail; cd <other repo> && commit -> allow (regression 2026-11-22)" 0
-run_guard Bash "{\"command\":\"echo hi && cd $RG && git push origin master\"}" "$RO"; expect "... && cd <protected> && push -> deny" 2 "push to protected"
-run_guard Bash "{\"command\":\"cd $RG && echo x; cd $RO && git commit -m x\"}" "$W"; expect "last cd before git wins -> allow" 0
+run_guard Bash "{\"command\":\"set -o pipefail; cd $RO && git add -A && git commit -m x\"}" "$RG"; gexpect "set -o pipefail; cd <other repo> && commit -> allow (regression 2026-11-22)" 0
+run_guard Bash "{\"command\":\"echo hi && cd $RG && git push origin master\"}" "$RO"; gexpect "... && cd <protected> && push -> deny" 2 "push to protected"
+run_guard Bash "{\"command\":\"cd $RG && echo x; cd $RO && git commit -m x\"}" "$W"; gexpect "last cd before git wins -> allow" 0
 git -C "$RG" switch -q -c fix/y
-run_guard Bash '{"command":"git commit -m x"}' "$RG";                       expect "commit on task branch -> allow" 0
-run_guard Bash '{"command":"git push -u origin fix/y"}' "$RG";              expect "push task branch -> allow" 0
+run_guard Bash '{"command":"git commit -m x"}' "$RG"; gexpect "commit on task branch -> allow" 0
+run_guard Bash '{"command":"git push -u origin fix/y"}' "$RG"; gexpect "push task branch -> allow" 0
 mkcfg '{"repos":{}}'
 git -C "$RG" switch -q master
-run_guard Bash '{"command":"git commit -m x"}' "$RG";                       expect "repo without guards config -> allow" 0
+run_guard Bash '{"command":"git commit -m x"}' "$RG"; gexpect "repo without guards config -> allow" 0
+
+echo "== guard: evasions found in review 2026-11-23 (fixed -> deny)"
+mkcfg "{\"repos\":{\"$RG\":{\"guards\":{\"protectBranches\":[\"master\"]}}}}"
+git -C "$RG" switch -q fix/y     # on a task branch
+run_guard Bash '{"command":"git checkout master && git merge fix/y"}' "$RG";   gexpect "checkout master && merge (same command) -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git switch master && git commit -m x"}' "$RG";      gexpect "switch master && commit -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git switch master && git switch -c fix/z && git commit -m x"}' "$RG"; gexpect "last switch wins (-c task branch) -> allow" 0
+run_guard Bash '{"command":"git push origin fix/y:refs/heads/master"}' "$RG";  gexpect "push <x>:refs/heads/master -> deny" 2 "push to protected"
+run_guard Bash '{"command":"git push origin +master"}' "$RG";                  gexpect "push +master -> deny" 2 "push to protected"
+run_guard Bash "{\"command\":\"git push origin 'master'\"}" "$RG";            gexpect "push 'master' (quoted) -> deny" 2 "push to protected"
+run_guard Bash '{"command":"git push --all origin"}' "$RG";                    gexpect "push --all -> deny" 2 "push --all"
+run_guard Bash '{"command":"git push origin fix/y # not master"}' "$RG";       gexpect "push task branch with # comment -> allow" 0
+run_guard Bash '{"command":"git push -u origin fix/push-ui"}' "$RG";           gexpect "branch name containing push -> allow" 0
+git -C "$RG" switch -q master    # on the protected branch
+run_guard Bash '{"command":"git -c user.name=x commit -m x"}' "$RG";           gexpect "git -c k=v commit -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git --no-pager commit -m x"}' "$RG";               gexpect "git --no-pager commit -> deny" 2 "protected branch"
+run_guard Bash '{"command":"/usr/bin/git commit -m x"}' "$RG";                 gexpect "/usr/bin/git commit -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git push origin HEAD"}' "$RG";                     gexpect "push origin HEAD from master -> deny" 2 "push to protected"
+run_guard Bash '{"command":"git commit -m \"DEVKIT_ALLOW_MASTER=1\""}' "$RG";  gexpect "approval text inside a commit message -> deny" 2 "protected branch"
+run_guard Bash '{"command":"echo git switch -c no ; git commit -m x"}' "$RG";  gexpect "switch -c only inside an echo -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git commit -m x; git switch -c later"}' "$RG";     gexpect "switch -c AFTER the commit -> deny" 2 "protected branch"
+run_guard Bash "{\"command\":\"pushd $RG && git commit -m x\"}" "$W";         gexpect "pushd <repo> && commit -> deny" 2 "protected branch"
+run_guard Bash '{"command":"cd sub && DEVKIT_ALLOW_MASTER=1 git push origin master"}' "$RG"; gexpect "approval prefix after && -> allow" 0
+git -C "$RG" worktree add -q --detach "$W/rg-wt" master 2>/dev/null
+run_guard Bash '{"command":"git push origin master"}' "$W/rg-wt";             gexpect "worktree of a protected repo uses its entry -> deny" 2 "push to protected"
+GE=".EN""V"; Ge=".En""v"
+run_guard Read "{\"file_path\":\"/x/$GE\"}";                                  gexpect "Read $GE (case-insensitive FS) -> deny" 2 "not allowed"
+run_guard Read "{\"file_path\":\"/x/$Ge.Local\"}";                            gexpect "Read $Ge.Local -> deny" 2 "not allowed"
+run_guard Read "{\"file_path\":\"/x/$GE.EXAMPLE\"}";                          gexpect "Read $GE.EXAMPLE (template) -> allow" 0
+run_guard Grep "{\"pattern\":\"X\",\"glob\":\"$E*\"}";                       gexpect "Grep glob $E* -> deny" 2 "glob"
+run_guard Grep "{\"pattern\":\"X\",\"path\":\"/x\",\"glob\":\"**/$E\"}";     gexpect "Grep glob **/$E -> deny" 2 "glob"
+run_guard Grep "{\"pattern\":\"X\",\"glob\":\"$E.example\"}";                gexpect "Grep glob $E.example -> allow" 0
+run_guard Grep "{\"pattern\":\"X\",\"glob\":\"*.php\"}";                     gexpect "Grep glob *.php -> allow" 0
+
+echo "== guard: second review round 2026-11-23"
+git -C "$RG" switch -q master
+run_guard Bash '{"command":"git checkout -- a.php && git commit -m x"}' "$RG";  gexpect "on master: checkout -- <path> (no switch) && commit -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git checkout . && git commit -m x"}' "$RG";         gexpect "on master: checkout . (no switch) && commit -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git push"}' "$RG";                                  gexpect "on master: bare git push -> deny" 2 "push from protected"
+run_guard Bash '{"command":"git push origin 2>&1 | tail -3"}' "$RG";            gexpect "on master: push origin 2>&1 (redirect is not a refspec) -> deny" 2 "push from protected"
+run_guard Bash '{"command":"git push origin $(git branch --show-current)"}' "$RG"; gexpect "on master: push origin \$(current) -> deny" 2 "push to protected"
+run_guard Bash '{"command":"if ! git diff --cached --quiet; then git commit -m x; fi"}' "$RG"; gexpect "if ...; then git commit -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git diff --quiet || { git commit -m x; }"}' "$RG";  gexpect "|| { git commit; } -> deny" 2 "protected branch"
+run_guard Bash '{"command":"for r in a; do git push origin master; done"}' "$RG"; gexpect "for ...; do git push -> deny" 2 "push to protected"
+run_guard Bash '{"command":"timeout 60 git push origin master"}' "$RG";         gexpect "timeout 60 git push -> deny" 2 "push to protected"
+run_guard Bash '{"command":"\\git commit -m x"}' "$RG";                         gexpect "\\git commit -> deny" 2 "protected branch"
+run_guard Bash "{\"command\":\"git --git-dir=$RG/.git --work-tree=$RG commit -m x\"}" "$W"; gexpect "--git-dir/--work-tree commit -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git push origin @"}' "$RG";                         gexpect "push origin @ from master -> deny" 2 "push to protected"
+run_guard Bash '{"command":"git push --mirror"}' "$RG";                         gexpect "push --mirror -> deny" 2 "push --all"
+TH=$'\xe0\xb8\xa3\xe0\xb8\xb8\xe0\xb9\x88\xe0\xb8\x99'   # Thai word, multi-byte
+run_guard Bash "{\"command\":\"echo $TH $TH $TH && git push origin master\"}" "$RG"; gexpect "multi-byte text before push (byte offsets) -> deny" 2 "push to protected"
+run_guard Bash $'{"command":"echo ok\\n  DEVKIT_ALLOW_MASTER=1 git push origin master"}' "$RG"; gexpect "indented approval on a later line -> allow" 0
+run_guard Bash '{"command":"DEVKIT_ALLOW_MASTER=1 GIT_MERGE_AUTOEDIT=no git merge fix/y"}' "$RG"; gexpect "approval with another VAR=x -> allow" 0
+git -C "$RG" switch -q fix/y
+run_guard Bash '{"command":"git add -A && git commit -m x && git checkout master && git merge fix/y && git push"}' "$RG"; gexpect "commit on task, then checkout master && merge (every write judged) -> deny" 2 "protected branch"
+run_guard Bash "{\"command\":\"git checkout \\\"master\\\" && git merge fix/y\"}" "$RG"; gexpect "checkout \"master\" (quoted) && merge -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git checkout master && git pull && git checkout - && git rebase master"}' "$RG"; gexpect "checkout - back to task before rebase -> allow" 0
+run_guard Bash '{"command":"git push"}' "$RG";                                  gexpect "on task: bare git push -> allow" 0
+run_guard Bash '{"command":"git checkout --track origin/master && git commit -m x"}' "$RG"; gexpect "checkout --track origin/master && commit -> deny" 2 "protected branch"
+git -C "$RG" switch -q master; git -C "$RG" switch -q fix/y   # previous branch = master
+run_guard Bash '{"command":"git switch - && git commit -m x"}' "$RG";          gexpect "switch - to previous (master) && commit -> deny" 2 "protected branch"
+
+echo "== guard: third review round 2026-11-23"
+# still on fix/y
+run_guard Bash "{\"command\":\"(cd $RG && git push origin master)\"}" "$W";    gexpect "(cd repo && git push origin master) -> deny" 2 "push to protected"
+run_guard Bash '{"command":"(git checkout master) && git merge fix/y"}' "$RG";  gexpect "(git checkout master) && merge -> deny" 2 "protected branch"
+run_guard Bash $'{"command":"git checkout master   # switch to master\\ngit merge fix/y"}' "$RG"; gexpect "checkout with # comment, merge on next line -> deny" 2 "protected branch"
+run_guard Bash $'{"command":"echo a\\ngit checkout master\\ngit merge fix/y"}' "$RG"; gexpect "multi-line: checkout on line 2, merge on line 3 -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git checkout master a.php && git commit -m revert"}' "$RG"; gexpect "checkout master <file> restores, does not switch -> allow" 0
+run_guard Bash '{"command":"git checkout master 2>&1 && git merge fix/y"}' "$RG"; gexpect "checkout master 2>&1 (redirect is not a path) && merge -> deny" 2 "protected branch"
+git -C "$RG" switch -q master
+run_guard Bash "{\"command\":\"(cd $RG && git push)\"}" "$W";                   gexpect "on master: (cd repo && git push) -> deny" 2 "push from protected"
+run_guard Bash '{"command":"git push;git status"}' "$RG";                       gexpect "on master: git push;git status -> deny" 2 "push from protected"
+run_guard Bash '{"command":"git checkout fix/y a.php && git commit -m x"}' "$RG"; gexpect "on master: checkout <branch> <file> (no switch) && commit -> deny" 2 "protected branch"
+run_guard Bash '{"command":"git push origin --tags"}' "$RG";                    gexpect "on master: push --tags only -> allow" 0
+run_guard Bash '{"command":"GIT_SSH_COMMAND=\"ssh -i k\" git push origin master"}' "$RG"; gexpect "quoted env value with spaces before git -> deny" 2 "push to protected"
+run_guard Bash '{"command":"git switch -c feat2 && git push"}' "$RG";          gexpect "on master: switch -c && bare push (replay on push) -> allow" 0
+git -C "$RG" switch -q fix/y
+run_guard Bash '{"command":"git push origin \"$(git branch --show-current)\":master"}' "$RG"; gexpect "push \$(…):master -> deny" 2 "push to protected"
+git -C "$RG" switch -q master
+run_guard Bash $'{"command":"echo a\\ngit switch -c fix/n\\ngit commit -m x"}' "$RG"; gexpect "multi-line: switch -c on line 2, commit on line 3 -> allow" 0
+run_guard Bash "{\"command\":\"echo $TH $TH $TH $TH; git commit -m x; git switch -c later\"}" "$RG"; gexpect "multi-byte text, commit before switch -c (proves byte offsets) -> deny" 2 "protected branch"
+
+echo "== guard: everyday commands stay allowed (no false positives)"
+git -C "$RG" switch -q master
+run_guard Bash '{"command":"git checkout -b fix/q origin/master"}' "$RG";      gexpect "on master: checkout -b x origin/master -> allow" 0
+run_guard Bash '{"command":"git switch -c feat && git push -u origin feat"}' "$RG"; gexpect "on master: switch -c && push new branch -> allow" 0
+git -C "$RG" switch -q fix/y
+run_guard Bash '{"command":"git checkout master -- a.php && git commit -m x"}' "$RG"; gexpect "checkout master -- <file> restores, does not switch -> allow" 0
+run_guard Bash "{\"command\":\"git commit -m 'push to master after review'\"}" "$RG"; gexpect "commit message mentioning push/master -> allow" 0
+run_guard Bash '{"command":"git rebase master && git push origin fix/y"}' "$RG"; gexpect "rebase onto master + push task branch -> allow" 0
+git -C "$RG" switch -q master
+
+echo "== guard: known limits (pinned — the guard is a speed bump, not a security boundary)"
+# These pass the guard on purpose. If one starts failing, update the README Limits section too.
+run_guard Bash "{\"command\":\"cat .en?\"}";                                  gexpect "LIMIT shell glob .en? is not expanded" 0
+run_guard Bash '{"command":"grep -r DB_PASS ."}';                              gexpect "LIMIT recursive grep of a folder" 0
+run_guard Grep '{"pattern":"DB_PASS","path":"/x"}';                            gexpect "LIMIT Grep over a whole folder" 0
+run_guard Bash "{\"command\":\"python3 -c 'open(\\\".e\\\"+\\\"nv\\\")'\"}"; gexpect "LIMIT interpreter building the name" 0
+run_guard Bash "{\"command\":\"D=$RG; cd \$D && git commit -m x\"}" "$RO";     gexpect "LIMIT \$VAR repo path (resolved as cwd, an unprotected repo)" 0
+run_guard Read '{"file_path":"/x/id_rsa"}';                                    gexpect "LIMIT other secret files (id_rsa, *.pem) are not watched" 0
+NOJQG="$W/nojq-guard"; mkdir -p "$NOJQG"; ln -sf "$(command -v cat)" "$NOJQG/cat"
+ERR=$(printf '{"tool_name":"Read","tool_input":{"file_path":"/x/%s"}}' "$E" | env PATH="$NOJQG" /bin/bash "$GUARD" 2>&1 >/dev/null); RC=$?
+gexpect "LIMIT without jq the guard lets everything through" 0
+run_guard Bash '{"command":"git reset --hard HEAD~1"}' "$RG";                  gexpect "LIMIT reset/revert/pull/am are not watched" 0
+run_guard Bash "{\"command\":\"bash -c 'git commit -m x'\"}" "$RG";            gexpect "LIMIT git run through bash -c" 0
+run_guard Bash "{\"command\":\"git -C $RO commit -m x && git -C $RG commit -m y\"}" "$W"; gexpect "LIMIT several repos in one command (first git write decides)" 0
 
 echo
 echo "passed: $pass  failed: $fail"
